@@ -1,14 +1,10 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Jun  7 20:18:46 2018
-
-@author: runyuwang
-"""
+#reference: 
+#https://www.kaggle.com/ogrellier/good-fun-with-ligthgbm/code
+#https://www.kaggle.com/gemartin/load-data-reduce-memory-usage
 
 # dev variables
 path = '/Users/runyuwang/Dropbox/MITB/Term 3/Applied Machine Learning/Project/Dataset/'
-#path = ''../input/'
+#path = '../input/'
 file_percent = 0.01
 
 import pandas as pd
@@ -38,10 +34,7 @@ def reduce_mem_usage(df):
                 elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
                     df[col] = df[col].astype(np.float32)
                 else:
-                    df[col] = df[col].astype(np.float64)
-        else:
-            df[col] = df[col].astype('category')
-    
+                    df[col] = df[col].astype(np.float64)    
     return df
 
 
@@ -106,50 +99,125 @@ def merge_bureau_bureau_bal(bureau, bureau_bal):
     return avg_bureau
     
 
-
-
 bureau = import_data(path + 'bureau.csv')
 bureau = process_bureau(bureau)
 
 bureau_bal = import_data(path + 'bureau_balance.csv')
 bureau_bal = process_bureau_bal(bureau_bal)
 
-bureau_full = merge_bureau_bureau_bal(bureau, bureau_bal)
+avg_bureau = merge_bureau_bureau_bal(bureau, bureau_bal)
+del bureau
+del bureau_bal
+gc.collect()
+
+def process_prev(prev_app):
+    #create dummies columns
+    prev_cat_features = [
+        f_ for f_ in prev_app.columns if prev_app[f_].dtype == 'object'
+    ]
+    
+    prev_dum = pd.DataFrame()
+    for f_ in prev_cat_features:
+        prev_dum = pd.concat([prev_dum, pd.get_dummies(prev_app[f_], prefix=f_).astype(np.uint8)], axis=1)
+    
+    prev_app = pd.concat([prev_app, prev_dum], axis=1)
+     
+    #print('Counting number of Prevs')
+    count_prev_per_curr = prev_app[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    prev_app['SK_ID_PREV'] = prev_app['SK_ID_CURR'].map(count_prev_per_curr['SK_ID_PREV'])
+    
+    #print('Averaging prev')
+    avg_prev_app = prev_app.groupby('SK_ID_CURR').mean()
+    
+    return avg_prev_app
 
 
+prev_app = import_data(path + 'previous_application.csv')
+avg_prev_app = process_prev(prev_app)
+del prev_app
+gc.collect()
+
+def process_pos_cash(pos):
+    #print('Go to dummies')
+    pos = pd.concat([pos, pd.get_dummies(pos['NAME_CONTRACT_STATUS'])], axis=1)
+    
+    #print('Compute nb of prevs per curr')
+    nb_prevs = pos[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    pos['SK_ID_PREV'] = pos['SK_ID_CURR'].map(nb_prevs['SK_ID_PREV'])
+    
+    #print('Go to averages')
+    avg_pos = pos.groupby('SK_ID_CURR').mean()
+        
+    return avg_pos
+
+pos = import_data(path + 'POS_CASH_balance.csv')
+avg_pos = process_pos_cash(pos)
+del pos
+gc.collect()
+
+def process_cc_bal(cc_bal): 
+    #print('Go to dummies')
+    cc_bal = pd.concat([cc_bal, pd.get_dummies(cc_bal['NAME_CONTRACT_STATUS'], prefix='cc_bal_status_')], axis=1)
+    
+    nb_prevs = cc_bal[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    cc_bal['SK_ID_PREV'] = cc_bal['SK_ID_CURR'].map(nb_prevs['SK_ID_PREV'])
+    
+    #print('Compute average')
+    avg_cc_bal = cc_bal.groupby('SK_ID_CURR').mean()
+    avg_cc_bal.columns = ['cc_bal_' + f_ for f_ in avg_cc_bal.columns]
+    return avg_cc_bal
+
+cc_bal = import_data(path + 'credit_card_balance.csv')
+avg_cc_bal = process_cc_bal(cc_bal)
+del cc_bal
+gc.collect()
 
 
-train = import_data(path + 'application_train.csv')
-bureau = import_data(path + 'bureau.csv')
-bureau = process_bureau(bureau)
-temp_table = merge_table(train,bureau,'SK_ID_CURR')
-#del train
-#del bureau
-#gc.collect()
+def process_inst(inst):
+    nb_prevs = inst[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    inst['SK_ID_PREV'] = inst['SK_ID_CURR'].map(nb_prevs['SK_ID_PREV'])
+    
+    avg_inst = inst.groupby('SK_ID_CURR').mean()
+    avg_inst.columns = ['inst_' + f_ for f_ in avg_inst.columns]
+    return avg_inst
+    
+inst = import_data(path + 'installments_payments.csv')
+avg_inst = process_inst(inst)
 
-bureau_bal = import_data(path + 'bureau_balance.csv')
-bureau_bal = process_bureau_bal(bureau_bal)
-temp_table= merge_table(temp_table,bureau_bal,'SK_ID_BUREAU')
-#del bureau_bal 
-#gc.collect()
 
-previous_app = import_data(path + 'previous_application.csv')
-temp_table= merge_table(temp_table,previous_app,'SK_ID_CURR')
-#del previous_app
-#gc.collect()
+data = import_data(path + 'application_train.csv')
+test = import_data(path + 'application_test.csv')
 
-pos_cash = import_data(path + 'POS_CASH_balance.csv')
-temp_table= merge_table(temp_table,pos_cash,'SK_ID_PREV')
-#del pos_cash
-#gc.collect()
+y = data['TARGET']
+del data['TARGET']
 
-installments = import_data(path + 'installments_payments.csv')
-temp_table= merge_table(temp_table,installments,'SK_ID_PREV')
-#del installments
-#gc.collect()
+categorical_feats = [
+    f for f in data.columns if data[f].dtype == 'object'
+]
+categorical_feats
+for f_ in categorical_feats:
+    data[f_], indexer = pd.factorize(data[f_])
+    test[f_] = indexer.get_indexer(test[f_])
 
-credit_card = import_data(path + 'credit_card_balance.csv')
-temp_table= merge_table(temp_table,credit_card,'SK_ID_PREV')
-#del credit_card
-#gc.collect()
+data = data.merge(right=avg_bureau.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_bureau.reset_index(), how='left', on='SK_ID_CURR')
 
+data = data.merge(right=avg_prev_app.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_prev_app.reset_index(), how='left', on='SK_ID_CURR')
+
+data = data.merge(right=avg_pos.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_pos.reset_index(), how='left', on='SK_ID_CURR')
+
+data = data.merge(right=avg_cc_bal.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_cc_bal.reset_index(), how='left', on='SK_ID_CURR')
+
+data = data.merge(right=avg_inst.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_inst.reset_index(), how='left', on='SK_ID_CURR')
+
+del avg_bureau, avg_prev_app
+gc.collect()
+
+
+# need to check bureau and breau bal join
+# need to rewrite the other tables as well
+# need to check memory as well
