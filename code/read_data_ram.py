@@ -224,4 +224,5 @@ test = test.merge(right=avg_inst_pay.reset_index(), how='left', on='SK_ID_CURR')
 del avg_bureau, avg_prev_app, avg_pos_cash, avg_cc_bal, avg_inst_pay
 gc.collect()
 
-
+print (train.shape)
+print (test.shape)
