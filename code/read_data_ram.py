@@ -2,10 +2,10 @@
 #https://www.kaggle.com/ogrellier/good-fun-with-ligthgbm/code
 #https://www.kaggle.com/gemartin/load-data-reduce-memory-usage
 
-# dev variables
+#dev variables
 path = '/Users/runyuwang/Dropbox/MITB/Term 3/Applied Machine Learning/Project/Dataset/'
 #path = '../input/'
-file_percent = 0.01
+file_percent = 0.001
 
 import pandas as pd
 import numpy as np
@@ -45,13 +45,29 @@ def import_data(file):
     num_line = sum((1 for i in open(file, 'rb')))
     df = pd.read_csv(file, parse_dates=True, keep_date_col=True, nrows= int(num_line * file_percent))
     df = reduce_mem_usage(df)
-    print('shape', df.shape)
+    print('shape', df.shape, '\n')
     return df
 
 
-def merge_table(l_table, r_table, l_key, r_key, l_suffixes, r_suffixes):
-    merged_table = l_table.merge(r_table, left_on = l_key, right_on = r_key, how = 'left',suffixes=(l_suffixes, r_suffixes))
-    return merged_table
+def process_bureau_bal(bureau_bal):
+    #create dummy columns for STATUS
+    bureau_bal_dum = pd.get_dummies(bureau_bal.STATUS, prefix='bureau_bal_status_')
+    bureau_bal_concat = pd.concat([bureau_bal, bureau_bal_dum], axis=1)
+    bureau_bal = bureau_bal_concat.drop('STATUS', axis=1)
+
+    #counting bureaus
+    bureau_bal_sub = bureau_bal[['SK_ID_BUREAU', 'MONTHS_BALANCE']]
+    bureau_bal_counts = bureau_bal_sub.groupby('SK_ID_BUREAU').count()    
+    bureau_bal['bureau_bal_count'] = bureau_bal['SK_ID_BUREAU'].map(bureau_bal_counts['MONTHS_BALANCE'])
+
+    #averaging bureau bal
+    avg_bureau_bal = bureau_bal.groupby('SK_ID_BUREAU').mean()
+    avg_bureau_bal.columns = ['avg_bureau_bal_' + f_ for f_ in avg_bureau_bal.columns]
+    
+    return avg_bureau_bal
+
+bureau_bal = import_data(path + 'bureau_balance.csv')
+bureau_bal = process_bureau_bal(bureau_bal)
 
 def process_bureau(bureau):
     #create dummy columns for three cols
@@ -65,46 +81,27 @@ def process_bureau(bureau):
     #no averaging here
     return bureau_dum
 
-def process_bureau_bal(bureau_bal):
-    #create dummy columns for STATUS
-    bureau_bal_dum = pd.get_dummies(bureau_bal.STATUS, prefix='bureau_bal_status')
-    bureau_bal_concat = pd.concat([bureau_bal, bureau_bal_dum], axis=1)
-    bureau_bal = bureau_bal_concat.drop('STATUS', axis=1)
-
-    #counting bureaus
-    bureau_bal_sub = bureau_bal[['SK_ID_BUREAU', 'MONTHS_BALANCE']]
-    bureau_bal_counts = bureau_bal_sub.groupby('SK_ID_BUREAU').count()    
-    bureau_bal['bureau_bal_count'] = bureau_bal['SK_ID_BUREAU'].map(bureau_bal_counts['MONTHS_BALANCE'])
-
-    #averaging bureau bal
-    avg_bureau_bal = bureau_bal.groupby('SK_ID_BUREAU',as_index=False).mean()
-    avg_bureau_bal.columns = ['avg_bureau_' + f_ for f_ in avg_bureau_bal.columns]
-    
-    return avg_bureau_bal
+bureau = import_data(path + 'bureau.csv')
+bureau = process_bureau(bureau)
 
 def merge_bureau_bureau_bal(bureau, bureau_bal):
     #merge bureau and burea_bal
-    bureau_full = merge_table(bureau, bureau_bal, 'SK_ID_BUREAU', 'avg_bureau_SK_ID_BUREAU','','_bur_bal')
+    bureau_full = bureau.merge(right= bureau_bal.reset_index(), how= 'left', on = 'SK_ID_BUREAU', suffixes = ('','_bur_bal'))
     
-    #counting bureau per SK_ID_CURR
+    #counting number of bureau for every SK_ID_CURR
     bureau_full_sub = bureau_full[['SK_ID_CURR', 'SK_ID_BUREAU']]
     count_bureau_per_curr = bureau_full_sub.groupby('SK_ID_CURR').count()
     bureau_full['count_bureau_per_curr'] = bureau_full['SK_ID_CURR'].map(count_bureau_per_curr['SK_ID_BUREAU'])
     
-    #drop SK_ID_BUREAU, the meaning changes
+    #drop SK_ID_BUREAU, SK_ID_BUREAU should not appear here. one row represents one SK_ID_CURR. 
+    #one SK_ID_CURR can have multiple SK_ID_BUREAU
     bureau_full = bureau_full.drop('SK_ID_BUREAU', axis=1)
     
     #averaging bureau
-    avg_bureau = bureau_full.groupby('SK_ID_CURR',as_index=False).mean()
+    avg_bureau = bureau_full.groupby('SK_ID_CURR').mean()
+    avg_bureau.columns = ['avg_bureau_' + f_ for f_ in avg_bureau.columns]
     return avg_bureau
     
-
-bureau = import_data(path + 'bureau.csv')
-bureau = process_bureau(bureau)
-
-bureau_bal = import_data(path + 'bureau_balance.csv')
-bureau_bal = process_bureau_bal(bureau_bal)
-
 avg_bureau = merge_bureau_bureau_bal(bureau, bureau_bal)
 del bureau
 del bureau_bal
@@ -122,47 +119,54 @@ def process_prev(prev_app):
     
     prev_app = pd.concat([prev_app, prev_dum], axis=1)
      
-    #print('Counting number of Prevs')
+    #count number of prev for every SK_ID_CURR
     count_prev_per_curr = prev_app[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
-    prev_app['SK_ID_PREV'] = prev_app['SK_ID_CURR'].map(count_prev_per_curr['SK_ID_PREV'])
+    prev_app['count_prev_per_curr'] = prev_app['SK_ID_CURR'].map(count_prev_per_curr['SK_ID_PREV'])   
+    prev_app = prev_app.drop('SK_ID_PREV', axis = 1)
     
-    #print('Averaging prev')
+    #averaging prev
     avg_prev_app = prev_app.groupby('SK_ID_CURR').mean()
+    avg_prev_app.columns = ['avg_prev_app_' + f_ for f_ in avg_prev_app.columns]
     
     return avg_prev_app
-
 
 prev_app = import_data(path + 'previous_application.csv')
 avg_prev_app = process_prev(prev_app)
 del prev_app
 gc.collect()
 
-def process_pos_cash(pos):
-    #print('Go to dummies')
-    pos = pd.concat([pos, pd.get_dummies(pos['NAME_CONTRACT_STATUS'])], axis=1)
+def process_pos_cash(pos_cash):
+    #create dummies column
+    pos_cash_dum = pd.get_dummies(pos_cash['NAME_CONTRACT_STATUS'], prefix = 'pos_cash_name_contract_status_')
+    pos_cash = pd.concat([pos_cash, pos_cash_dum], axis=1)
     
-    #print('Compute nb of prevs per curr')
-    nb_prevs = pos[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
-    pos['SK_ID_PREV'] = pos['SK_ID_CURR'].map(nb_prevs['SK_ID_PREV'])
+    #count number of prev per curr
+    count_prev_per_curr = pos_cash[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    pos_cash['count_prev_per_curr'] = pos_cash['SK_ID_CURR'].map(count_prev_per_curr['SK_ID_PREV'])
+    pos_cash = pos_cash.drop('SK_ID_PREV', axis = 1)
     
-    #print('Go to averages')
-    avg_pos = pos.groupby('SK_ID_CURR').mean()
-        
-    return avg_pos
+    #averaging pos cash
+    avg_pos_cash = pos_cash.groupby('SK_ID_CURR').mean()
+    avg_pos_cash.columns = ['avg_pos_cash_' + f_ for f_ in avg_pos_cash.columns]
+    
+    return avg_pos_cash
 
-pos = import_data(path + 'POS_CASH_balance.csv')
-avg_pos = process_pos_cash(pos)
-del pos
+pos_cash = import_data(path + 'POS_CASH_balance.csv')
+avg_pos_cash = process_pos_cash(pos_cash)
+del pos_cash
 gc.collect()
 
 def process_cc_bal(cc_bal): 
-    #print('Go to dummies')
-    cc_bal = pd.concat([cc_bal, pd.get_dummies(cc_bal['NAME_CONTRACT_STATUS'], prefix='cc_bal_status_')], axis=1)
+    #create dummies column
+    cc_bal_dum = pd.get_dummies(cc_bal['NAME_CONTRACT_STATUS'], prefix='cc_bal_name_contract_status_')
+    cc_bal = pd.concat([cc_bal, cc_bal_dum], axis=1)
     
-    nb_prevs = cc_bal[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
-    cc_bal['SK_ID_PREV'] = cc_bal['SK_ID_CURR'].map(nb_prevs['SK_ID_PREV'])
+    #count number of prev per curr
+    count_prev_per_curr = cc_bal[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    cc_bal['count_prev_per_curr'] = cc_bal['SK_ID_CURR'].map(count_prev_per_curr['SK_ID_PREV'])
+    cc_bal = cc_bal.drop('SK_ID_PREV', axis = 1)
     
-    #print('Compute average')
+    #compute average
     avg_cc_bal = cc_bal.groupby('SK_ID_CURR').mean()
     avg_cc_bal.columns = ['cc_bal_' + f_ for f_ in avg_cc_bal.columns]
     return avg_cc_bal
@@ -173,51 +177,51 @@ del cc_bal
 gc.collect()
 
 
-def process_inst(inst):
-    nb_prevs = inst[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
-    inst['SK_ID_PREV'] = inst['SK_ID_CURR'].map(nb_prevs['SK_ID_PREV'])
+def process_inst_pay(inst_pay):
+    count_prev_per_curr = inst_pay[['SK_ID_CURR', 'SK_ID_PREV']].groupby('SK_ID_CURR').count()
+    inst_pay['count_prev_per_curr'] = inst_pay['SK_ID_CURR'].map(count_prev_per_curr['SK_ID_PREV'])
+    inst_pay = inst_pay.drop('SK_ID_PREV', axis = 1)
     
-    avg_inst = inst.groupby('SK_ID_CURR').mean()
-    avg_inst.columns = ['inst_' + f_ for f_ in avg_inst.columns]
-    return avg_inst
+    avg_inst_pay = inst_pay.groupby('SK_ID_CURR').mean()
+    avg_inst_pay.columns = ['inst_pay_' + f_ for f_ in avg_inst_pay.columns]
+    return avg_inst_pay
     
-inst = import_data(path + 'installments_payments.csv')
-avg_inst = process_inst(inst)
+inst_pay = import_data(path + 'installments_payments.csv')
+avg_inst_pay = process_inst_pay(inst_pay)
 
+del inst_pay
+gc.collect()
 
-data = import_data(path + 'application_train.csv')
+train = import_data(path + 'application_train.csv')
 test = import_data(path + 'application_test.csv')
 
-y = data['TARGET']
-del data['TARGET']
+y = train['TARGET']
+del train['TARGET']
 
 categorical_feats = [
-    f for f in data.columns if data[f].dtype == 'object'
+    f for f in train.columns if train[f].dtype == 'object'
 ]
 categorical_feats
 for f_ in categorical_feats:
-    data[f_], indexer = pd.factorize(data[f_])
+    train[f_], indexer = pd.factorize(train[f_])
     test[f_] = indexer.get_indexer(test[f_])
 
-data = data.merge(right=avg_bureau.reset_index(), how='left', on='SK_ID_CURR')
+train = train.merge(right=avg_bureau.reset_index(), how='left', on='SK_ID_CURR')
 test = test.merge(right=avg_bureau.reset_index(), how='left', on='SK_ID_CURR')
 
-data = data.merge(right=avg_prev_app.reset_index(), how='left', on='SK_ID_CURR')
+train = train.merge(right=avg_prev_app.reset_index(), how='left', on='SK_ID_CURR')
 test = test.merge(right=avg_prev_app.reset_index(), how='left', on='SK_ID_CURR')
 
-data = data.merge(right=avg_pos.reset_index(), how='left', on='SK_ID_CURR')
-test = test.merge(right=avg_pos.reset_index(), how='left', on='SK_ID_CURR')
+train = train.merge(right=avg_pos_cash.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_pos_cash.reset_index(), how='left', on='SK_ID_CURR')
 
-data = data.merge(right=avg_cc_bal.reset_index(), how='left', on='SK_ID_CURR')
+train = train.merge(right=avg_cc_bal.reset_index(), how='left', on='SK_ID_CURR')
 test = test.merge(right=avg_cc_bal.reset_index(), how='left', on='SK_ID_CURR')
 
-data = data.merge(right=avg_inst.reset_index(), how='left', on='SK_ID_CURR')
-test = test.merge(right=avg_inst.reset_index(), how='left', on='SK_ID_CURR')
+train = train.merge(right=avg_inst_pay.reset_index(), how='left', on='SK_ID_CURR')
+test = test.merge(right=avg_inst_pay.reset_index(), how='left', on='SK_ID_CURR')
 
-del avg_bureau, avg_prev_app
+del avg_bureau, avg_prev_app, avg_pos_cash, avg_cc_bal, avg_inst_pay
 gc.collect()
 
 
-# need to check bureau and breau bal join
-# need to rewrite the other tables as well
-# need to check memory as well
